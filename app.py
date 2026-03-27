@@ -1,11 +1,12 @@
 import streamlit as st
 from pypdf import PdfReader, PdfWriter, Transformation
 import io
+import copy
 
 st.set_page_config(page_title="Metafix Cheque Tool", page_icon="🏦")
 
 st.title("🏦 Metafix Cheque Reformatter")
-st.write("Upload the Zoho 'Voucher' PDF to shift the top cheque data to the 89mm center position.")
+st.write("Corrected version: Clears top data and shifts to center.")
 
 uploaded_file = st.file_uploader("Upload Zoho PDF", type="pdf")
 
@@ -13,32 +14,39 @@ if uploaded_file:
     reader = PdfReader(uploaded_file)
     writer = PdfWriter()
 
-    # 89mm is ~252 points from the top. 
-    # Since Zoho starts at the top (~792 points on a standard Letter page),
-    # we shift the y-axis by approximately -540 points to land at your 89mm mark.
-    # Note: If it lands slightly too high or low, adjust this number.
-    SHIFT_Y = -540 
+    # Offset to hit the 89mm center mark from the top
+    # Adjusted to ensure it lands precisely in the Metafix green boxes
+    SHIFT_Y = -515 
 
     for page in reader.pages:
-        # Create a new blank page
-        new_page = writer.add_blank_page(width=page.mediabox.width, height=page.mediabox.height)
+        # 1. Create the Background (Stubs only)
+        # We use a copy to avoid modifying the original data prematurely
+        bg_page = writer.add_blank_page(width=page.mediabox.width, height=page.mediabox.height)
+        
+        # We only merge the bottom 2/3 of the original page to clear the top cheque
+        # This prevents the "repeated info" you saw at the bottom
+        stub_page = copy.copy(page)
+        stub_page.mediabox.upper_right = (page.mediabox.right, page.mediabox.top / 1.5)
+        bg_page.merge_page(stub_page)
 
-        # 1. Overlay the original stubs (for the top and bottom sections)
-        new_page.merge_page(page)
-
-        # 2. Create the 'Cheque' layer by shifting the top data down to the middle
-        # This moves the Payee, Date, and Amount lines to the Metafix green boxes.
+        # 2. Create the Cheque Layer
+        # We take the TOP portion of the original and shift it to the middle
+        cheque_layer = copy.copy(page)
+        # Crop to just the top cheque data
+        cheque_layer.mediabox.lower_left = (0, page.mediabox.top / 1.5)
+        
+        # Apply the transformation to move it to the 89mm center
         op = Transformation().translate(tx=0, ty=SHIFT_Y)
-        new_page.merge_transformed_page(page, op)
+        bg_page.merge_transformed_page(cheque_layer, op)
 
-    # Export buffer
+    # Export
     pdf_out = io.BytesIO()
     writer.write(pdf_out)
-
+    
     st.success("Reformatting Complete!")
     st.download_button(
-        label="Download Aligned Cheque",
+        label="Download Fixed Metafix Cheque",
         data=pdf_out.getvalue(),
-        file_name="Metafix_Aligned_Cheque.pdf",
+        file_name="Metafix_Fixed_Cheque.pdf",
         mime="application/pdf"
     )
