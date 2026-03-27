@@ -2,109 +2,133 @@ import streamlit as st
 from pypdf import PdfReader
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import LETTER
-from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 import io
 import re
+import os
 
-# Register Rubik font - Fallback to Helvetica if file is missing
-try:
-    pdfmetrics.registerFont(TTFont('Rubik', 'Rubik-Regular.ttf'))
-    FONT_NAME = 'Rubik'
-except Exception:
-    FONT_NAME = 'Helvetica'
+# --- FONT REGISTRATION ---
+def register_fonts():
+    # Attempt to load Rubik if files are in the repo
+    fonts = {"Regular": "Rubik-Regular.ttf", "Bold": "Rubik-Bold.ttf"}
+    try:
+        for name, file in fonts.items():
+            pdfmetrics.registerFont(TTFont(f'Rubik-{name}', file))
+        return "Rubik-Regular", "Rubik-Bold"
+    except:
+        return "Helvetica", "Helvetica-Bold"
 
-def extract_zoho_data(uploaded_file):
-    reader = PdfReader(uploaded_file)
-    text = reader.pages[0].extract_text()
-    data = {}
+FONT_REG, FONT_BOLD = register_fonts()
+
+def extract_dynamic_data(pdf_file):
+    reader = PdfReader(pdf_file)
+    full_text = ""
+    for page in reader.pages:
+        full_text += page.extract_text() + "\n"
     
-    # Extract Date: Looking for YYYY/MM/DD [cite: 17, 20]
-    date_match = re.search(r'(\d{4})/(\d{2})/(\d{2})', text)
-    if date_match:
-        y, m, d = date_match.groups()
-        data['date_formatted'] = f"{m}  {d}  {y}"
-        data['bill_date'] = f"{y}/{m}/{d}"
-    else:
-        data['date_formatted'] = "03  26  2026"
-        data['bill_date'] = "2026/03/26"
-
-    # Extract Numeric Amount [cite: 18]
-    amount_match = re.search(r'(\d+\.\d{2})', text)
-    data['amount_num'] = amount_match.group(1) if amount_match else "5.75"
+    # Regex Patterns for Zoho Voucher logic
+    date_pattern = r"(\d{4}/\d{2}/\d{2})"
+    amount_num_pattern = r"Total\s*[\$]?\s*([\d,]+\.\d{2})"
+    # Captures "Two Thousand... and 50/100" style strings
+    words_pattern = r"([A-Z][a-z]+.*?\d{1,2}/100)" 
     
-    # Extract Written Amount [cite: 13]
-    words_match = re.search(r'([A-Za-z]+\s+and\s+\d{2}/100)', text)
-    data['amount_words'] = words_match.group(1) if words_match else "Five and 75/100"
-
-    # Payee & Address [cite: 14, 15, 16, 19]
-    data['payee'] = "Aims Fasteners & Fittings"
-    data['address'] = "7284 Cordner St.\nSuite 209\nMontreal Quebec H8N 2W8"
+    date_match = re.search(date_pattern, full_text)
+    amount_match = re.search(amount_num_pattern, full_text)
+    words_match = re.search(words_pattern, full_text)
     
-    # Bill ID [cite: 21]
-    bill_id_match = re.search(r'Bill ID\s*"\s*,\s*"\s*(\d+)', text)
-    data['bill_id'] = bill_id_match.group(1) if bill_id_match else "1234"
+    # Logic to find Payee: Usually follows "Pay to" or is the first prominent name
+    lines = [line.strip() for line in full_text.split('\n') if line.strip()]
+    payee = lines[0] if lines else "Unknown Payee"
     
-    return data
+    # Extract Bill details (Table data)
+    # Simple logic: find a line with a date and an amount that isn't the total
+    bill_id = "Voucher"
+    for line in lines:
+        if "BILL-" in line or "INV-" in line:
+            bill_id = line.split()[0]
+            break
 
-def create_cheque_pdf(data):
-    packet = io.BytesIO()
-    can = canvas.Canvas(packet, pagesize=LETTER)
-    width, height = LETTER 
+    return {
+        "payee": payee,
+        "date": date_match.group(1) if date_match else "2024/01/01",
+        "amount_num": amount_match.group(1) if amount_match else "0.00",
+        "amount_words": words_match.group(1) if words_match else "Zero Dollars",
+        "bill_id": bill_id
+    }
 
-    def draw_stub(y_start):
-        can.setFont(FONT_NAME, 10)
-        can.drawString(20*mm, y_start, "Bill Date")
-        can.drawString(65*mm, y_start, "Bill ID")
-        can.drawString(110*mm, y_start, "Bill Amount")
-        can.drawString(155*mm, y_start, "Payment Amount")
-        can.setFont(FONT_NAME, 9)
-        can.drawString(20*mm, y_start - 8*mm, data['bill_date'])
-        can.drawString(65*mm, y_start - 8*mm, data['bill_id'])
-        can.drawString(110*mm, y_start - 8*mm, f"${data['amount_num']}")
-        can.drawString(155*mm, y_start - 8*mm, f"${data['amount_num']}")
+def format_cheque_date(date_str):
+    """Reformats YYYY/MM/DD to MM  DD  YYYY with extra spacing"""
+    p = date_str.split('/')
+    return f"{p[1]}    {p[2]}    {p[0]}"
+
+def generate_pdf(data):
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=LETTER)
+    
+    def draw_remittance(y_top):
+        c.setFont(FONT_BOLD, 10)
+        c.drawString(72, y_top, f"PAYEE: {data['payee']}")
+        c.drawRightString(540, y_top, f"DATE: {data['date']}")
+        
+        c.setFont(FONT_REG, 9)
+        c.drawString(72, y_top - 30, "REF NO.")
+        c.drawString(200, y_top - 30, "DESCRIPTION")
+        c.drawRightString(540, y_top - 30, "AMOUNT")
+        c.line(72, y_top - 35, 540, y_top - 35)
+        
+        c.drawString(72, y_top - 50, data['bill_id'])
+        c.drawString(200, y_top - 50, f"Payment to {data['payee']}")
+        c.drawRightString(540, y_top - 50, data['amount_num'])
 
     # 1. TOP STUB
-    draw_stub(260*mm)
+    draw_remittance(740)
 
-    # 2. MIDDLE CHEQUE (89mm from top)
-    chq_top = height - (89 * mm) 
-    can.setFont(FONT_NAME, 11)
-    can.drawString(150*mm, chq_top - 12*mm, data['date_formatted']) # Date
-    can.drawString(35*mm, chq_top - 28*mm, data['payee'])           # Payee
-    can.drawString(178*mm, chq_top - 28*mm, data['amount_num'])     # $ Amount
-    can.drawString(25*mm, chq_top - 38*mm, data['amount_words'])    # Text Amount
+    # 2. MIDDLE CHEQUE (The critical alignment area)
+    # Date Boxes (Adjust X/Y to hit your pre-printed boxes exactly)
+    c.setFont(FONT_REG, 12)
+    c.drawRightString(530, 485, format_cheque_date(data['date']))
     
-    # Address Block
-    text_obj = can.beginText(35*mm, chq_top - 50*mm)
-    text_obj.setFont(FONT_NAME, 9)
-    for line in data['address'].split('\n'):
-        text_obj.textLine(line)
-    can.drawText(text_obj)
+    # Payee
+    c.setFont(FONT_BOLD, 11)
+    c.drawString(100, 445, data['payee'])
+    
+    # Numerical Amount
+    c.drawString(485, 445, f"**{data['amount_num']}**")
+    
+    # Written Amount
+    c.setFont(FONT_REG, 10)
+    c.drawString(72, 420, f"{data['amount_words']} ********************************")
 
     # 3. BOTTOM STUB
-    draw_stub(95*mm)
+    draw_remittance(250)
 
-    can.save()
-    packet.seek(0)
-    return packet
+    c.showPage()
+    c.save()
+    buffer.seek(0)
+    return buffer
 
-# --- STREAMLIT UI ---
-st.title("Metafix Cheque Reformatter")
-uploaded_file = st.file_uploader("Upload Zoho PDF", type="pdf")
+# --- Streamlit UI ---
+st.title("Metafix PDF Cheque Transformer")
+st.info("Upload any Zoho Voucher PDF to map data to Metafix Stationary.")
 
-if uploaded_file is not None:
-    try:
-        extracted_data = extract_zoho_data(uploaded_file)
-        pdf_output = create_cheque_pdf(extracted_data)
-        
-        st.success("Cheque Ready!")
-        st.download_button(
-            label="Download Formatted Cheque",
-            data=pdf_output,
-            file_name=f"Cheque_{extracted_data['bill_id']}.pdf",
-            mime="application/pdf"
-        )
-    except Exception as e:
-        st.error(f"Error: {e}")
+uploaded_file = st.file_uploader("Upload Source PDF", type="pdf")
+
+if uploaded_file:
+    data = extract_dynamic_data(uploaded_file)
+    
+    st.subheader("Extracted Data Confirmation")
+    col1, col2 = st.columns(2)
+    col1.write(f"**Payee:** {data['payee']}")
+    col1.write(f"**Date:** {data['date']}")
+    col2.write(f"**Amount:** ${data['amount_num']}")
+    col2.write(f"**ID:** {data['bill_id']}")
+
+    final_pdf = generate_pdf(data)
+    
+    st.download_button(
+        label="Download Reformatted Cheque",
+        data=final_pdf,
+        file_name=f"Metafix_{data['payee']}.pdf",
+        mime="application/pdf"
+    )
