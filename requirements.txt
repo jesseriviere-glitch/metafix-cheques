@@ -1,3 +1,5 @@
-streamlit
 pypdf
 reportlab
+streamlit
+streamlit-pdf-viewer
+pandas
