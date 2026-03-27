@@ -1,0 +1,27 @@
+{
+    "date": {
+        "x": 518,
+        "y": 48,
+        "size": 8
+    },
+    "amount_figures": {
+        "x": 550,
+        "y": 96,
+        "size": 12
+    },
+    "amount_words": {
+        "x": 69,
+        "y": 97,
+        "size": 10
+    },
+    "payee": {
+        "x": 69,
+        "y": 129,
+        "size": 11
+    },
+    "address": {
+        "x": 69,
+        "y": 143,
+        "size": 9
+    }
+}
